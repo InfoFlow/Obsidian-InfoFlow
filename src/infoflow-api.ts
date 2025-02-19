@@ -1,6 +1,6 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError } from "axios";
 
-const DEFAULT_ENDPOINT = 'https://www.infoflow.app';
+const DEFAULT_ENDPOINT = "https://www.infoflow.app";
 
 interface Note {
 	id: string;
@@ -58,31 +58,35 @@ async function fetchItems(
 	params: FetchItemsParams = {}
 ): Promise<PaginatedResponse> {
 	try {
-		const response = await axios.get<PaginatedResponse>(`${endpoint}/api/v1/external/export/items`, {
-			headers: {
-				Authorization: `Bearer ${apiToken}`,
-			},
-			params,
-		});
+		const response = await axios.get<PaginatedResponse>(
+			`${endpoint}/api/v1/external/export/items`,
+			{
+				headers: {
+					Authorization: `Bearer ${apiToken}`,
+				},
+				params,
+			}
+		);
 		return response.data;
 	} catch (error) {
 		if (error instanceof AxiosError) {
 			if (error.response) {
 				// Server responded with a status other than 200 range
-				console.error('Error response:', error.response.data);
+				console.error("Error response:", error.response.data);
 			} else if (error.request) {
 				// Request was made but no response received
-				console.error('Error request:', error.request);
+				console.error("Error request:", error.request);
 			} else {
 				// Something happened in setting up the request
-				console.error('Error message:', error.message);
+				console.error("Error message:", error.message);
 			}
 		} else {
 			// Something else happened
-			console.error('Error:', error);
+			console.error("Error:", error);
 		}
 		throw error;
 	}
 }
 
-export { fetchItems, Note, ExportedItem, PaginatedResponse, FetchItemsParams };
+export { fetchItems };
+export type { Note, ExportedItem, PaginatedResponse, FetchItemsParams };

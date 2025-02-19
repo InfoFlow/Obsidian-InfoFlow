@@ -1,5 +1,5 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { fetchItems, FetchItemsParams } from './infoflow-api';
+import { fetchItems, FetchItemsParams } from './src/infoflow-api';
 import SyncModal from './SyncModal';
 
 interface MyPluginSettings {

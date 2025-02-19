@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
+	"id": "infoflow",
+	"name": "InfoFlow",
+	"version": "0.1.0",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "InfoFlow is a plugin for Obsidian that allows you to export your items in InfoFlow to Obsidian.",
+	"author": "InfoFlow",
+	"authorUrl": "https://www.infoflow.app",
+	"fundingUrl": "https://www.infoflow.app/pricing",
 	"isDesktopOnly": false
 }
