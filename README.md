@@ -2,6 +2,8 @@
 
 This plugin integrates [InfoFlow](https://www.infoflow.app) with Obsidian, allowing you to sync your saved articles, web pages, notes, and highlights directly into your Obsidian vault.
 
+[中文版](./README_zh.md)
+
 ## Features
 
 - Sync InfoFlow items to your Obsidian vault
