@@ -59,9 +59,25 @@ export default class MyPlugin extends Plugin {
 		await this.loadSettings();
 
 		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		const ribbonIconEl = this.addRibbonIcon('sync', 'Sync InfoFlow Items', async (evt: MouseEvent) => {
+			const syncModal = new SyncModal(this.app);
+			syncModal.open();
+
+			try {
+				const params: FetchItemsParams = {
+					from: this.settings.from,
+					to: this.settings.to,
+					tags: this.settings.tags,
+					folders: this.settings.folders,
+					updatedAt: this.settings.updatedAt,
+				};
+				const response = await fetchItems(this.settings.infoFlowEndpoint, this.settings.apiToken, params);
+				await this.syncItems(response.items);
+				syncModal.setProgress('Sync completed successfully.');
+			} catch (error) {
+				console.error('Error syncing items:', error);
+				syncModal.setError('Error syncing items. Please check the console for more details.');
+			}
 		});
 		// Perform additional things with the ribbon
 		ribbonIconEl.addClass('my-plugin-ribbon-class');
