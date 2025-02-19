@@ -4,6 +4,9 @@ This plugin integrates [InfoFlow](https://www.infoflow.app) with Obsidian, allow
 
 [中文版](./README_zh.md)
 
+This plugin is still under development.
+Please report any issues using GitHub issues or to [InfoFlow Support](https://www.infoflow.app/support). Thanks for your support!
+
 ## Features
 
 - Sync InfoFlow items to your Obsidian vault
