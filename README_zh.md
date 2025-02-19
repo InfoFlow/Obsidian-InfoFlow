@@ -2,6 +2,8 @@
 
 此插件將 [InfoFlow](https://www.infoflow.app) 與 Obsidian 整合，讓您可以將保存的文章、網頁、筆記和重點直接同步到您的 Obsidian 倉庫。
 
+InfoFlow 是一個個人知識管理系統 (PKMS)，它允許您從瀏覽器保存文章、網頁、X 貼文、YouTube 影片、筆記和重點，並將它們同步到您的 Obsidian 儲存庫。
+
 此插件仍在開發中。
 請使用 GitHub Issues 或向 [InfoFlow 支援](https://www.infoflow.app/support) 報告任何問題。感謝您的支持！
 

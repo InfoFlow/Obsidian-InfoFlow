@@ -2,7 +2,12 @@
 
 This plugin integrates [InfoFlow](https://www.infoflow.app) with Obsidian, allowing you to sync your saved articles, web pages, notes, and highlights directly into your Obsidian vault.
 
+InfoFlow is a Personal Knowledge Management System (PKMS) that allows you to save articles, web pages, X posts, YouTube videos, notes, and highlights from your browser and sync them to your Obsidian vault.
+
 [中文版](./README_zh.md)
+[Version française](./README_fr.md)
+[Versión en español](./README_es.md)
+
 
 This plugin is still under development.
 Please report any issues using GitHub issues or to [InfoFlow Support](https://www.infoflow.app/support). Thanks for your support!
