@@ -1,6 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
 import { ExportedItem, fetchItems, FetchItemsParams, Note } from './src/infoflow-api';
 import SyncModal from './SyncModal';
+import { fetchAllItems, convertHtmlToMarkdown } from './src/utils/infoflow';
 
 interface MyPluginSettings {
 	mySetting: string;
@@ -71,8 +72,19 @@ export default class MyPlugin extends Plugin {
 					folders: this.settings.folders,
 					updatedAt: this.settings.updatedAt,
 				};
-				const response = await fetchItems(this.settings.infoFlowEndpoint, this.settings.apiToken, params);
-				await this.syncItems(response.items);
+
+				syncModal.setProgress('Fetching items...');
+				const items = await fetchAllItems(
+					this.settings.infoFlowEndpoint,
+					this.settings.apiToken,
+					params,
+					(current, total) => {
+						syncModal.setProgress(`Fetching items... (${current}/${total} items)`);
+					}
+				);
+
+				syncModal.setProgress('Processing items...');
+				await this.syncItems(items);
 				syncModal.setProgress('Sync completed successfully.');
 			} catch (error) {
 				console.error('Error syncing items:', error);
@@ -151,8 +163,19 @@ export default class MyPlugin extends Plugin {
 						folders: this.settings.folders,
 						updatedAt: this.settings.updatedAt,
 					};
-					const response = await fetchItems(this.settings.infoFlowEndpoint, this.settings.apiToken, params);
-					await this.syncItems(response.items);
+
+					syncModal.setProgress('Fetching items...');
+					const items = await fetchAllItems(
+						this.settings.infoFlowEndpoint,
+						this.settings.apiToken,
+						params,
+						(current, total) => {
+							syncModal.setProgress(`Fetching items... (${current}/${total} items)`);
+						}
+					);
+
+					syncModal.setProgress('Processing items...');
+					await this.syncItems(items);
 					syncModal.setProgress('Sync completed successfully.');
 				} catch (error) {
 					console.error('Error syncing items:', error);
@@ -190,6 +213,9 @@ export default class MyPlugin extends Plugin {
 
 			const filePath = `${folderPath}/${fileName}`;
 
+			// Convert content from HTML to Markdown if needed
+			const content = item.content ? convertHtmlToMarkdown(item.content) : '';
+
 			// Generate note content from template
 			let noteContent = this.settings.noteTemplate;
 			noteContent = noteContent
@@ -199,7 +225,7 @@ export default class MyPlugin extends Plugin {
 				.replace('{{tags}}', item.tags.join(', '))
 				.replace('{{createdAt}}', item.createdAt)
 				.replace('{{updatedAt}}', item.updatedAt)
-				.replace('{{content}}', item.content || '');
+				.replace('{{content}}', content);
 
 			// Process highlights/notes
 			let highlightsSection = '';
