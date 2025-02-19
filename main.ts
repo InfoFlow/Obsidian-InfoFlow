@@ -365,10 +365,17 @@ class SampleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API Token")
-			.setDesc("The API token for accessing the InfoFlow API")
+			.setDesc(createFragment((frag) => {
+				frag.appendText("The API token for accessing the InfoFlow API. Can be created at ");
+				const link = frag.createEl("a", {
+					href: "https://www.infoflow.app/user_portal/external_token",
+					text: "https://www.infoflow.app/user_portal/external_token"
+				});
+				link.setAttr("target", "_blank");
+			}))
 			.addText((text) =>
 				text
-					.setPlaceholder("Enter your API token")
+					.setPlaceholder("Enter your API token. Sample format: `if_ext_*****`")
 					.setValue(this.plugin.settings.apiToken)
 					.onChange(async (value) => {
 						this.plugin.settings.apiToken = value;
