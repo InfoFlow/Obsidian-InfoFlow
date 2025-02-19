@@ -1,5 +1,5 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { fetchItems, FetchItemsParams } from './src/infoflow-api';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
+import { ExportedItem, fetchItems, FetchItemsParams, Note } from './src/infoflow-api';
 import SyncModal from './SyncModal';
 
 interface MyPluginSettings {
@@ -11,6 +11,12 @@ interface MyPluginSettings {
 	tags?: string[];
 	folders?: string[];
 	updatedAt?: string;
+	// Sync settings
+	targetFolder: string;
+	fileNameTemplate: string;
+	noteTemplate: string;
+	syncFrequency: number; // in minutes
+	lastSyncTime?: number;
 }
 
 const DEFAULT_SETTINGS: MyPluginSettings = {
@@ -21,7 +27,29 @@ const DEFAULT_SETTINGS: MyPluginSettings = {
 	to: undefined,
 	tags: undefined,
 	folders: undefined,
-	updatedAt: undefined
+	updatedAt: undefined,
+	// Default sync settings
+	targetFolder: 'InfoFlow',
+	fileNameTemplate: '{{title}}',
+	noteTemplate: `---
+title: {{title}}
+source: {{url}}
+author: {{author}}
+tags: {{tags}}
+created: {{createdAt}}
+updated: {{updatedAt}}
+---
+
+{{content}}
+
+## Highlights
+{{#notes}}
+> {{content}}
+{{#quotedText}}
+Source: {{quotedText}}
+{{/quotedText}}
+{{/notes}}`,
+	syncFrequency: 60
 }
 
 export default class MyPlugin extends Plugin {
@@ -43,13 +71,13 @@ export default class MyPlugin extends Plugin {
 		statusBarItemEl.setText('Status Bar Text');
 
 		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
+		// this.addCommand({
+		// 	id: 'open-sample-modal-simple',
+		// 	name: 'Open sample modal (simple)',
+		// 	callback: () => {
+		// 		new SampleModal(this.app).open();
+		// 	}
+		// });
 		// This adds an editor command that can perform some operation on the current editor instance
 		this.addCommand({
 			id: 'sample-editor-command',
@@ -108,8 +136,7 @@ export default class MyPlugin extends Plugin {
 						updatedAt: this.settings.updatedAt,
 					};
 					const response = await fetchItems(this.settings.infoFlowEndpoint, this.settings.apiToken, params);
-					// Process the response and sync items into Obsidian
-					console.log('Fetched items:', response.items);
+					await this.syncItems(response.items);
 					syncModal.setProgress('Sync completed successfully.');
 				} catch (error) {
 					console.error('Error syncing items:', error);
@@ -129,6 +156,71 @@ export default class MyPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	async syncItemToObsidian(item: ExportedItem) {
+		try {
+			// Create target folder if it doesn't exist
+			const folderPath = this.settings.targetFolder;
+			if (!await this.app.vault.adapter.exists(folderPath)) {
+				await this.app.vault.createFolder(folderPath);
+			}
+
+			// Generate file name from template
+			const fileName = this.settings.fileNameTemplate
+				.replace('{{title}}', item.title)
+				.replace(/[\\/:*?"<>|]/g, '-') // Replace invalid characters
+				+ '.md';
+
+			const filePath = `${folderPath}/${fileName}`;
+
+			// Generate note content from template
+			let noteContent = this.settings.noteTemplate;
+			noteContent = noteContent
+				.replace('{{title}}', item.title)
+				.replace('{{url}}', item.url || '')
+				.replace('{{author}}', item.metadata?.author || '')
+				.replace('{{tags}}', item.tags.join(', '))
+				.replace('{{createdAt}}', item.createdAt)
+				.replace('{{updatedAt}}', item.updatedAt)
+				.replace('{{content}}', item.content || '');
+
+			// Process highlights/notes
+			let highlightsSection = '';
+			if (item.notes && item.notes.length > 0) {
+				highlightsSection = item.notes.map((note: Note) => {
+					let highlight = `> ${note.content}`;
+					if (note.quotedText) {
+						highlight += `\nSource: ${note.quotedText}`;
+					}
+					return highlight;
+				}).join('\n\n');
+			}
+			noteContent = noteContent.replace('{{#notes}}(.*?){{/notes}}', highlightsSection);
+
+			// Create or update the file
+			const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+			if (existingFile instanceof TFile) {
+				await this.app.vault.modify(existingFile, noteContent);
+			} else {
+				await this.app.vault.create(filePath, noteContent);
+			}
+
+			// Update last sync time
+			this.settings.lastSyncTime = Date.now();
+			await this.saveSettings();
+
+			new Notice(`Synced: ${item.title}`);
+		} catch (error) {
+			console.error('Error syncing item:', error);
+			new Notice(`Error syncing: ${item.title}`);
+		}
+	}
+
+	async syncItems(items: ExportedItem[]) {
+		for (const item of items) {
+			await this.syncItemToObsidian(item);
+		}
 	}
 }
 
@@ -161,16 +253,16 @@ class SampleSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-					}));
+		// new Setting(containerEl)
+		// 	.setName('Setting #1')
+		// 	.setDesc('It\'s a secret')
+		// 	.addText(text => text
+		// 		.setPlaceholder('Enter your secret')
+		// 		.setValue(this.plugin.settings.mySetting)
+		// 		.onChange(async (value) => {
+		// 			this.plugin.settings.mySetting = value;
+		// 			await this.plugin.saveSettings();
+		// 			}));
 
 		new Setting(containerEl)
 			.setName('InfoFlow Endpoint')
@@ -246,6 +338,61 @@ class SampleSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.updatedAt || '')
 				.onChange(async (value) => {
 					this.plugin.settings.updatedAt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Target Folder')
+			.setDesc('The target folder for synced items')
+			.addText(text => text
+				.setPlaceholder('Enter the target folder')
+				.setValue(this.plugin.settings.targetFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.targetFolder = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('File Name Template')
+			.setDesc('The template for generating file names')
+			.addText(text => text
+				.setPlaceholder('Enter the file name template')
+				.setValue(this.plugin.settings.fileNameTemplate)
+				.onChange(async (value) => {
+					this.plugin.settings.fileNameTemplate = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Note Template')
+			.setDesc('The template for generating note content')
+			.addText(text => text
+				.setPlaceholder('Enter the note template')
+				.setValue(this.plugin.settings.noteTemplate)
+				.onChange(async (value) => {
+					this.plugin.settings.noteTemplate = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Sync Frequency')
+			.setDesc('The frequency for syncing items')
+			.addText(text => text
+				.setPlaceholder('Enter the sync frequency (in minutes)')
+				.setValue(this.plugin.settings.syncFrequency.toString())
+				.onChange(async (value) => {
+					this.plugin.settings.syncFrequency = parseInt(value);
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Last Sync Time')
+			.setDesc('The time of the last sync')
+			.addText(text => text
+				.setPlaceholder('Enter the last sync time')
+				.setValue(this.plugin.settings.lastSyncTime?.toString() || '')
+				.onChange(async (value) => {
+					this.plugin.settings.lastSyncTime = value ? parseInt(value) : undefined;
 					await this.plugin.saveSettings();
 				}));
 	}
