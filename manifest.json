@@ -1,7 +1,7 @@
 {
 	"id": "infoflow",
 	"name": "InfoFlow",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"minAppVersion": "0.15.0",
 	"description": "InfoFlow is a plugin for Obsidian that allows you to export your items in InfoFlow to Obsidian.",
 	"author": "InfoFlow",
