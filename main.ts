@@ -18,7 +18,7 @@ import {
 import SyncModal from "./SyncModal";
 import { fetchAllItems, convertHtmlToMarkdown } from "./src/utils/infoflow";
 
-interface MyPluginSettings {
+interface InfoFlowPluginSettings {
 	mySetting: string;
 	infoFlowEndpoint: string;
 	apiToken: string;
@@ -35,7 +35,7 @@ interface MyPluginSettings {
 	lastSyncTime?: number;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
+const DEFAULT_SETTINGS: InfoFlowPluginSettings = {
 	mySetting: "default",
 	infoFlowEndpoint: "https://www.infoflow.app",
 	apiToken: "",
@@ -70,7 +70,7 @@ Source: {{quotedText}}
 };
 
 export default class InfoFlowPlugin extends Plugin {
-	settings: MyPluginSettings;
+	settings: InfoFlowPluginSettings;
 
 	async onload() {
 		await this.loadSettings();
@@ -151,7 +151,7 @@ export default class InfoFlowPlugin extends Plugin {
 		// Add a command to manually trigger the sync process
 		this.addCommand({
 			id: "sync-infoflow-items",
-			name: "Sync InfoFlow Items",
+			name: "Sync Items",
 			callback: async () => {
 				const syncModal = new SyncModal(this.app);
 				syncModal.open();
