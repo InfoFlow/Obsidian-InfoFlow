@@ -1,7 +1,7 @@
 {
 	"id": "infoflow",
 	"name": "InfoFlow",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"minAppVersion": "0.15.0",
 	"description": "Import your contents from InfoFlow to Obsidian. Similar to ReadWise or Omnivore importers.",
 	"author": "InfoFlow",
