@@ -19,8 +19,7 @@ import SyncModal from "./SyncModal";
 import { fetchAllItems, convertHtmlToMarkdown } from "./src/utils/infoflow";
 
 interface InfoFlowPluginSettings {
-	mySetting: string;
-	infoFlowEndpoint: string;
+	infoFlowEndpoint?: string;
 	apiToken: string;
 	from?: string;
 	to?: string;
@@ -36,7 +35,6 @@ interface InfoFlowPluginSettings {
 }
 
 const DEFAULT_SETTINGS: InfoFlowPluginSettings = {
-	mySetting: "default",
 	infoFlowEndpoint: "https://www.infoflow.app",
 	apiToken: "",
 	from: undefined,
@@ -75,6 +73,8 @@ export default class InfoFlowPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		this.addSettingTab(new InfoFlowSettingTab(this.app, this));
+
 		// Add a command to manually trigger the sync process
 		this.addCommand({
 			id: "sync-infoflow-items",
@@ -94,7 +94,7 @@ export default class InfoFlowPlugin extends Plugin {
 
 					syncModal.setProgress("Fetching items...");
 					const items = await fetchAllItems(
-						this.settings.infoFlowEndpoint,
+						this.settings.infoFlowEndpoint || "https://www.infoflow.app",
 						this.settings.apiToken,
 						params,
 						(current, total) => {
@@ -240,24 +240,13 @@ class InfoFlowSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		// new Setting(containerEl)
-		// 	.setName('Setting #1')
-		// 	.setDesc('It\'s a secret')
-		// 	.addText(text => text
-		// 		.setPlaceholder('Enter your secret')
-		// 		.setValue(this.plugin.settings.mySetting)
-		// 		.onChange(async (value) => {
-		// 			this.plugin.settings.mySetting = value;
-		// 			await this.plugin.saveSettings();
-		// 			}));
-
 		new Setting(containerEl)
 			.setName("InfoFlow Endpoint")
 			.setDesc("The endpoint for the InfoFlow API")
 			.addText((text) =>
 				text
 					.setPlaceholder("Enter the InfoFlow endpoint")
-					.setValue(this.plugin.settings.infoFlowEndpoint)
+					.setValue(this.plugin.settings.infoFlowEndpoint || "https://www.infoflow.app")
 					.onChange(async (value) => {
 						this.plugin.settings.infoFlowEndpoint = value;
 						await this.plugin.saveSettings();
