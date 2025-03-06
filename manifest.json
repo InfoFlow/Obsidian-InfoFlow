@@ -6,6 +6,6 @@
 	"description": "Import your contents from InfoFlow to Obsidian. Similar to ReadWise or Omnivore importers.",
 	"author": "InfoFlow",
 	"authorUrl": "https://www.infoflow.app",
-	"fundingUrl": "https://www.infoflow.app/pricing",
+	"fundingUrl": "https://www.infoflow.app/cloud_pricing",
 	"isDesktopOnly": false
 }
