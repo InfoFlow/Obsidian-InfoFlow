@@ -3,7 +3,7 @@
 	"name": "InfoFlow",
 	"version": "1.0.2",
 	"minAppVersion": "0.15.0",
-	"description": "Import your contents from InfoFlow to Obsidian.",
+	"description": "Import your contents from InfoFlow to Obsidian. Similar to ReadWise or Omnivore importers.",
 	"author": "InfoFlow",
 	"authorUrl": "https://www.infoflow.app",
 	"fundingUrl": "https://www.infoflow.app/pricing",
