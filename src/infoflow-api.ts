@@ -60,6 +60,9 @@ export async function fetchItems(endpoint: string, token: string, params: FetchI
 	});
 
 	if (response.status !== 200) {
+		if (response.status === 401) {
+			throw new Error("Invalid API token. Please check your token in the InfoFlow Cloud settings.");
+		}
 		throw new Error(`Failed to fetch items: ${response.status}`);
 	}
 

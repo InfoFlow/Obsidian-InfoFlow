@@ -1,7 +1,5 @@
 import {
 	App,
-	Editor,
-	MarkdownView,
 	Modal,
 	Notice,
 	Plugin,
@@ -11,7 +9,6 @@ import {
 } from "obsidian";
 import {
 	ExportedItem,
-	fetchItems,
 	FetchItemsParams,
 	Note,
 } from "./src/infoflow-api";
@@ -110,7 +107,7 @@ export default class InfoFlowPlugin extends Plugin {
 				} catch (error) {
 					console.error("Error syncing items:", error);
 					syncModal.setError(
-						"Error syncing items. Please check the console for more details."
+						`Error syncing items: ${error}`
 					);
 				}
 			},
@@ -208,22 +205,6 @@ export default class InfoFlowPlugin extends Plugin {
 		for (const item of items) {
 			await this.syncItemToObsidian(item);
 		}
-	}
-}
-
-class InfoFlowSyncModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.setText("InfoFlow Sync");
-	}
-
-	onClose() {
-		const { contentEl } = this;
-		contentEl.empty();
 	}
 }
 
