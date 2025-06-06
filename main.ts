@@ -11,6 +11,7 @@ import {
 	ExportedItem,
 	FetchItemsParams,
 	Note,
+	fetchDeletedItemIds,
 } from "./src/infoflow-api";
 import SyncModal from "./SyncModal";
 import { fetchAllItems, convertHtmlToMarkdown } from "./src/utils/infoflow";
@@ -28,6 +29,7 @@ interface InfoFlowPluginSettings {
 	fileNameTemplate: string;
 	noteTemplate: string;
 	syncFrequency: number; // in minutes
+	deleteActionForSyncedNotes: "trash" | "permanent" | "nothing";
 	lastSyncTime?: number;
 }
 
@@ -50,6 +52,7 @@ author: {{author}}
 tags: {{tags}}
 created: {{createdAt}}
 updated: {{updatedAt}}
+infoflow_id: {{id}}
 ---
 
 {{content}}
@@ -62,6 +65,7 @@ Source: {{quotedText}}
 {{/quotedText}}
 {{/notes}}`,
 	syncFrequency: 60,
+	deleteActionForSyncedNotes: "trash",
 };
 
 export default class InfoFlowPlugin extends Plugin {
@@ -81,7 +85,8 @@ export default class InfoFlowPlugin extends Plugin {
 				syncModal.open();
 
 				try {
-					const params: FetchItemsParams = {
+					const lastSyncTimeSeconds = this.settings.lastSyncTime ? Math.floor(this.settings.lastSyncTime / 1000) : undefined;
+					let fetchParams: FetchItemsParams = {
 						from: this.settings.from,
 						to: this.settings.to,
 						tags: this.settings.tags,
@@ -89,11 +94,21 @@ export default class InfoFlowPlugin extends Plugin {
 						updatedAt: this.settings.updatedAt,
 					};
 
-					syncModal.setProgress("Fetching items...");
+					if (lastSyncTimeSeconds) {
+						fetchParams = {
+							last_synced_at: lastSyncTimeSeconds,
+							tags: this.settings.tags,
+							folders: this.settings.folders,
+						};
+						syncModal.setProgress("Fetching updated items since last sync...");
+					} else {
+						syncModal.setProgress("Fetching all items (full sync)...");
+					}
+
 					const items = await fetchAllItems(
 						this.settings.infoFlowEndpoint || "https://www.infoflow.app",
 						this.settings.apiToken,
-						params,
+						fetchParams,
 						(current, total) => {
 							syncModal.setProgress(
 								`Fetching items... (${current}/${total} items)`
@@ -103,6 +118,28 @@ export default class InfoFlowPlugin extends Plugin {
 
 					syncModal.setProgress("Processing items...");
 					await this.syncItems(items);
+
+					if (lastSyncTimeSeconds) {
+						syncModal.setProgress("Fetching deleted item IDs...");
+						try {
+							const deletedItemIds = await fetchDeletedItemIds(
+								this.settings.infoFlowEndpoint || "https://www.infoflow.app",
+								this.settings.apiToken,
+								lastSyncTimeSeconds
+							);
+
+							if (deletedItemIds && deletedItemIds.length > 0) {
+								syncModal.setProgress(`Processing ${deletedItemIds.length} deleted items...`);
+								await this.deleteObsidianNotes(deletedItemIds);
+							}
+						} catch (deleteError) {
+							console.error("Error fetching or processing deleted items:", deleteError);
+							syncModal.setError(`Error processing deletions: ${deleteError.message || deleteError}`);
+						}
+					}
+
+					this.settings.lastSyncTime = Date.now();
+					await this.saveSettings();
 					syncModal.setProgress("Sync completed successfully.");
 				} catch (error) {
 					console.error("Error syncing items:", error);
@@ -162,6 +199,7 @@ export default class InfoFlowPlugin extends Plugin {
 				.replace("{{createdAt}}", item.createdAt)
 				.replace("{{itemType}}", item.itemType)
 				.replace("{{updatedAt}}", item.updatedAt)
+				.replace("{{id}}", item.id)
 				.replace("{{content}}", content);
 
 			// Process highlights/notes
@@ -206,6 +244,71 @@ export default class InfoFlowPlugin extends Plugin {
 			await this.syncItemToObsidian(item);
 		}
 	}
+
+	async deleteObsidianNotes(deletedItemIds: string[]) {
+		if (!deletedItemIds || deletedItemIds.length === 0) {
+			return;
+		}
+		new Notice(`Attempting to process ${deletedItemIds.length} deleted item IDs.`);
+		const targetFolderPath = this.settings.targetFolder;
+		const files = this.app.vault.getMarkdownFiles();
+		let deletedCount = 0;
+		const remainingIdsToDelete = [...deletedItemIds];
+
+		for (const file of files) {
+			if (remainingIdsToDelete.length === 0) break;
+
+			if (file.path.startsWith(targetFolderPath + "/")) {
+				const fileCache = this.app.metadataCache.getFileCache(file);
+				const frontmatter = fileCache?.frontmatter;
+
+				if (frontmatter && frontmatter.infoflow_id) {
+					const noteId = String(frontmatter.infoflow_id);
+					const index = remainingIdsToDelete.indexOf(noteId);
+					if (index > -1) {
+						const deleteAction = this.settings.deleteActionForSyncedNotes;
+						if (deleteAction === "nothing") {
+							new Notice(`Skipped deletion for note (ID: ${noteId}) as per settings: ${file.name}`);
+							remainingIdsToDelete.splice(index, 1);
+							continue;
+						}
+
+						try {
+							if (deleteAction === "trash") {
+								await this.app.vault.trash(file, true);
+								new Notice(`Moved to trash: ${file.name} (ID: ${noteId})`);
+							} else {
+								await this.app.vault.delete(file);
+								new Notice(`Permanently deleted: ${file.name} (ID: ${noteId})`);
+							}
+							deletedCount++;
+							remainingIdsToDelete.splice(index, 1);
+						} catch (e) {
+							new Notice(`Error processing deletion for ${file.name} (Action: ${deleteAction}): ${e.message}`);
+							console.error(`Error processing deletion for file ${file.path} (Action: ${deleteAction}):`, e);
+						}
+					}
+				}
+			}
+		}
+
+		if (deletedCount > 0) {
+			new Notice(`Successfully processed ${deletedCount} notes for deletion/trashing based on InfoFlow IDs.`);
+		}
+		if (remainingIdsToDelete.length > 0) {
+			const unprocessedMessage = this.settings.deleteActionForSyncedNotes === "nothing"
+				? `${remainingIdsToDelete.length} notes were kept as per settings.`
+				: `${remainingIdsToDelete.length} IDs were not found or couldn't be deleted/trashed.`;
+			new Notice(unprocessedMessage);
+			if (this.settings.deleteActionForSyncedNotes !== "nothing") {
+				console.warn("Could not delete/trash notes for IDs:", remainingIdsToDelete);
+			}
+		} else if (deletedCount === 0 && deletedItemIds.length > 0 && this.settings.deleteActionForSyncedNotes !== "nothing") {
+			new Notice("No notes matched the IDs for deletion/trashing in the target folder.");
+		} else if (deletedItemIds.length === 0) {
+			new Notice("No deleted item IDs to process.");
+		}
+	}
 }
 
 class InfoFlowSettingTab extends PluginSettingTab {
@@ -233,6 +336,19 @@ class InfoFlowSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		new Setting(containerEl)
+			.setName("Action for Deleted Notes in InfoFlow")
+			.setDesc("What to do with a synced note in Obsidian when its corresponding item is deleted in InfoFlow.")
+			.addDropdown(dropdown => dropdown
+				.addOption("nothing", "Do Nothing (Keep Note)")
+				.addOption("trash", "Move to Obsidian Trash")
+				.addOption("permanent", "Permanently Delete Note")
+				.setValue(this.plugin.settings.deleteActionForSyncedNotes)
+				.onChange(async (value: "trash" | "permanent" | "nothing") => {
+					this.plugin.settings.deleteActionForSyncedNotes = value;
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName("API Token")
@@ -375,21 +491,14 @@ class InfoFlowSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName("Last Sync Time")
-			.setDesc("The time of the last sync")
-			.addText((text) =>
-				text
-					.setPlaceholder("Enter the last sync time")
-					.setValue(
-						this.plugin.settings.lastSyncTime?.toString() || ""
-					)
-					.onChange(async (value) => {
-						this.plugin.settings.lastSyncTime = value
-							? parseInt(value)
-							: undefined;
-						await this.plugin.saveSettings();
-					})
-			);
+		const lastSyncTimeSetting = new Setting(containerEl)
+            .setName("Last Sync Time")
+            .setDesc("The date and time of the last successful synchronization. This value is updated automatically by the plugin.");
+
+        const lastSyncValue = this.plugin.settings.lastSyncTime
+            ? new Date(this.plugin.settings.lastSyncTime).toLocaleString()
+            : "Not synced yet";
+
+        lastSyncTimeSetting.addText(text => text.setValue(lastSyncValue).setDisabled(true));
 	}
 }
