@@ -26,6 +26,7 @@ interface InfoFlowPluginSettings {
 	syncFrequency: number; // in minutes (0 = manual)
 	syncOnLoad: boolean;
 	syncDeletedFiles: boolean;
+	showRibbonIcon: boolean;
 	lastSyncTime?: number;
 
 	// New sync state (v2)
@@ -64,6 +65,7 @@ Source: {{quotedText}}
 	syncFrequency: 60,
 	syncOnLoad: true,
 	syncDeletedFiles: false,
+	showRibbonIcon: true,
 	syncState: {
 		lastSuccessfulCursor: null,
 		inFlightRun: null,
@@ -100,6 +102,19 @@ export default class InfoFlowPlugin extends Plugin {
 		});
 
 		this.configureSchedule();
+
+		if (this.settings.showRibbonIcon) {
+			const ribbonIconEl = this.addRibbonIcon("cloud", "Sync InfoFlow items", async () => {
+				try {
+					new Notice("Starting InfoFlow sync...");
+					await this.runSync({ auto: false });
+				} catch (error) {
+					console.error("Error syncing items:", error);
+					new Notice(`InfoFlow sync failed: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			});
+			ribbonIconEl.addClass("infoflow-ribbon-icon");
+		}
 
 		// Add a command to manually trigger the sync process
 		this.addCommand({
@@ -197,6 +212,7 @@ export default class InfoFlowPlugin extends Plugin {
 		}
 		if (merged.syncOnLoad === undefined) merged.syncOnLoad = DEFAULT_SETTINGS.syncOnLoad;
 		if (merged.syncDeletedFiles === undefined) merged.syncDeletedFiles = DEFAULT_SETTINGS.syncDeletedFiles;
+		if (merged.showRibbonIcon === undefined) merged.showRibbonIcon = DEFAULT_SETTINGS.showRibbonIcon;
 		if (merged.syncFrequency === undefined) merged.syncFrequency = DEFAULT_SETTINGS.syncFrequency;
 
 		// Legacy key: keep supporting `updatedAt` filter, but cursor lives in syncState.
@@ -456,6 +472,18 @@ class InfoFlowSettingTab extends PluginSettingTab {
 				toggle.onChange(async (val) => {
 					this.plugin.settings.syncOnLoad = val;
 					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Show ribbon icon")
+			.setDesc("If enabled, adds an InfoFlow sync icon to the left ribbon.")
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.showRibbonIcon);
+				toggle.onChange(async (val) => {
+					this.plugin.settings.showRibbonIcon = val;
+					await this.plugin.saveSettings();
+					new Notice("Restart Obsidian to apply ribbon icon changes");
 				});
 			});
 
