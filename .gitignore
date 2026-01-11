@@ -20,3 +20,12 @@ data.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+
+# Untracked config and agent files
+.agent/
+.claude/
+.cursor/
+.opencode/
+AGENTS.md
+GEMINI.md
+openspec/
