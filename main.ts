@@ -1,19 +1,15 @@
 import {
 	App,
-	Modal,
 	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
 	TFile,
 } from "obsidian";
-import {
-	ExportedItem,
-	FetchItemsParams,
-	Note,
-} from "./src/infoflow-api";
-import SyncModal from "./SyncModal";
-import { fetchAllItems, convertHtmlToMarkdown } from "./src/utils/infoflow";
+import { StatusBarQueue } from "./src/sync/status_bar";
+import { SyncManager, SyncState } from "./src/sync/sync_manager";
+import { getInfoFlowIdFromFrontmatter, INFOFLOW_ID_FRONTMATTER_KEY } from "./src/sync/frontmatter";
+import { validateTemplate } from "./src/sync/templating";
 
 interface InfoFlowPluginSettings {
 	infoFlowEndpoint?: string;
@@ -27,8 +23,13 @@ interface InfoFlowPluginSettings {
 	targetFolder: string;
 	fileNameTemplate: string;
 	noteTemplate: string;
-	syncFrequency: number; // in minutes
+	syncFrequency: number; // in minutes (0 = manual)
+	syncOnLoad: boolean;
+	syncDeletedFiles: boolean;
 	lastSyncTime?: number;
+
+	// New sync state (v2)
+	syncState: SyncState;
 }
 
 const DEFAULT_SETTINGS: InfoFlowPluginSettings = {
@@ -42,169 +43,219 @@ const DEFAULT_SETTINGS: InfoFlowPluginSettings = {
 	// Default sync settings
 	targetFolder: "InfoFlow",
 	fileNameTemplate: "{{title}}_{{id}}_{{itemType}}",
-	noteTemplate: `---
-title: {{title}}
-url: {{url}}
-item_type: {{itemType}}
-author: {{author}}
-tags: {{tags}}
-created: {{createdAt}}
-updated: {{updatedAt}}
----
+	noteTemplate: `# {{title}}
 
-{{content}}
+{{#url}}
+Source: {{url}}
+{{/url}}
+
+{{{content}}}
 
 ## Highlights
 {{#notes}}
 > {{content}}
 {{#quotedText}}
+
 Source: {{quotedText}}
 {{/quotedText}}
-{{/notes}}`,
+
+{{/notes}}
+`,
 	syncFrequency: 60,
+	syncOnLoad: true,
+	syncDeletedFiles: false,
+	syncState: {
+		lastSuccessfulCursor: null,
+		inFlightRun: null,
+		itemPathIndex: {},
+		reimportQueue: [],
+		deletedResyncQueue: [],
+		lastRun: null,
+	},
 };
 
 export default class InfoFlowPlugin extends Plugin {
 	settings: InfoFlowPluginSettings;
+	private statusBar?: StatusBarQueue;
+	private statusBarIntervalId: number | null = null;
+	private scheduleIntervalId: number | null = null;
+	private syncManager?: SyncManager;
 
 	async onload() {
 		await this.loadSettings();
 
 		this.addSettingTab(new InfoFlowSettingTab(this.app, this));
 
+		this.statusBar = new StatusBarQueue(this.addStatusBarItem());
+		this.statusBarIntervalId = window.setInterval(() => this.statusBar?.tick(), 250);
+		this.syncManager = new SyncManager({
+			app: this.app,
+			vault: this.app.vault,
+			status: this.statusBar,
+			saveState: async (nextState) => {
+				this.settings.syncState = nextState;
+				this.settings.lastSyncTime = Date.now();
+				await this.saveSettings();
+			},
+		});
+
+		this.configureSchedule();
+
 		// Add a command to manually trigger the sync process
 		this.addCommand({
 			id: "sync-infoflow-items",
 			name: "Sync items",
 			callback: async () => {
-				const syncModal = new SyncModal(this.app);
-				syncModal.open();
-
 				try {
-					const params: FetchItemsParams = {
-						from: this.settings.from,
-						to: this.settings.to,
-						tags: this.settings.tags,
-						folders: this.settings.folders,
-						updatedAt: this.settings.updatedAt,
-					};
-
-					syncModal.setProgress("Fetching items...");
-					const items = await fetchAllItems(
-						this.settings.infoFlowEndpoint || "https://www.infoflow.app",
-						this.settings.apiToken,
-						params,
-						(current, total) => {
-							syncModal.setProgress(
-								`Fetching items... (${current}/${total} items)`
-							);
-						}
-					);
-
-					syncModal.setProgress("Processing items...");
-					await this.syncItems(items);
-					syncModal.setProgress("Sync completed successfully.");
+					new Notice("Starting InfoFlow sync...");
+					await this.runSync({ auto: false });
 				} catch (error) {
 					console.error("Error syncing items:", error);
-					syncModal.setError(
-						`Error syncing items: ${error}`
-					);
+					new Notice(`InfoFlow sync failed: ${error instanceof Error ? error.message : String(error)}`);
 				}
 			},
 		});
+
+		this.addCommand({
+			id: "infoflow-reimport-active-file",
+			name: "Delete and reimport this document",
+			callback: async () => {
+				const active = this.app.workspace.getActiveFile();
+				if (!active) {
+					new Notice("No active file");
+					return;
+				}
+				const cache = this.app.metadataCache.getFileCache(active);
+				const id = getInfoFlowIdFromFrontmatter(cache);
+				if (!id) {
+					new Notice(`Missing ${INFOFLOW_ID_FRONTMATTER_KEY} in frontmatter`);
+					return;
+				}
+
+				// Explicit user action: allow full reimport fetch but filter to this ID.
+				this.settings.syncState.reimportQueue = Array.from(new Set([...this.settings.syncState.reimportQueue, id]));
+				await this.saveSettings();
+
+				await this.app.vault.delete(active);
+				await this.runSync({ auto: false });
+			},
+		});
+
+		this.registerEvent(
+			this.app.vault.on("rename", async (file, oldPath) => {
+				if (!(file instanceof TFile)) return;
+				const cache = this.app.metadataCache.getFileCache(file);
+				const id = getInfoFlowIdFromFrontmatter(cache);
+				if (!id) return;
+				if (this.settings.syncState.itemPathIndex[id] === oldPath) {
+					this.settings.syncState.itemPathIndex[id] = file.path;
+					await this.saveSettings();
+				}
+			})
+		);
+
+		this.registerEvent(
+			this.app.vault.on("delete", async (file) => {
+				if (!(file instanceof TFile)) return;
+				const cache = this.app.metadataCache.getFileCache(file);
+				let id = getInfoFlowIdFromFrontmatter(cache);
+				if (!id) {
+					const entry = Object.entries(this.settings.syncState.itemPathIndex).find(
+						([, path]) => path === file.path
+					);
+					if (entry) id = entry[0];
+				}
+				if (!id) return;
+				if (!this.settings.syncDeletedFiles) return;
+
+				this.settings.syncState.deletedResyncQueue = Array.from(
+					new Set([...this.settings.syncState.deletedResyncQueue, id])
+				);
+				await this.saveSettings();
+			})
+		);
+
+		this.app.workspace.onLayoutReady(async () => {
+			if (this.settings.syncOnLoad) {
+				await this.runSync({ auto: true });
+			}
+		});
 	}
 
-	onunload() {}
+	onunload() {
+		if (this.statusBarIntervalId) window.clearInterval(this.statusBarIntervalId);
+		if (this.scheduleIntervalId) window.clearInterval(this.scheduleIntervalId);
+	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData()
-		);
+		const loaded = (await this.loadData()) as Partial<InfoFlowPluginSettings> | null;
+		const merged = Object.assign({}, DEFAULT_SETTINGS, loaded ?? {});
+
+		// Backfill new state fields for older installs.
+		if (!merged.syncState) {
+			merged.syncState = JSON.parse(JSON.stringify(DEFAULT_SETTINGS.syncState)) as SyncState;
+		}
+		if (merged.syncOnLoad === undefined) merged.syncOnLoad = DEFAULT_SETTINGS.syncOnLoad;
+		if (merged.syncDeletedFiles === undefined) merged.syncDeletedFiles = DEFAULT_SETTINGS.syncDeletedFiles;
+		if (merged.syncFrequency === undefined) merged.syncFrequency = DEFAULT_SETTINGS.syncFrequency;
+
+		// Legacy key: keep supporting `updatedAt` filter, but cursor lives in syncState.
+		this.settings = merged;
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
 
-	async syncItemToObsidian(item: ExportedItem) {
-		try {
-			// Create target folder if it doesn't exist
-			const folderPath = this.settings.targetFolder;
-			if (!(await this.app.vault.adapter.exists(folderPath))) {
-				await this.app.vault.createFolder(folderPath);
-			}
-
-			// Generate file name from template
-			const fileName =
-				this.settings.fileNameTemplate
-					.replace("{{title}}", item.title)
-					.replace("{{id}}", item.id)
-					.replace("{{itemType}}", item.itemType)
-					.replace(/[\\/:*?"<>|]/g, "-") + // Replace invalid characters
-				".md";
-
-			const filePath = `${folderPath}/${fileName}`;
-
-			// Convert content from HTML to Markdown if needed
-			const content = item.content
-				? convertHtmlToMarkdown(item.content)
-				: "";
-
-			// Generate note content from template
-			let noteContent = this.settings.noteTemplate;
-			noteContent = noteContent
-				.replace("{{title}}", item.title)
-				.replace("{{url}}", item.url || "")
-				.replace("{{author}}", item.metadata?.author || "")
-				.replace("{{tags}}", item.tags.join(", "))
-				.replace("{{createdAt}}", item.createdAt)
-				.replace("{{itemType}}", item.itemType)
-				.replace("{{updatedAt}}", item.updatedAt)
-				.replace("{{content}}", content);
-
-			// Process highlights/notes
-			let highlightsSection = "";
-			if (item.notes && item.notes.length > 0) {
-				highlightsSection = item.notes
-					.map((note: Note) => {
-						let highlight = `> ${note.content}`;
-						if (note.quotedText) {
-							highlight += `\nSource: ${note.quotedText}`;
-						}
-						return highlight;
-					})
-					.join("\n\n");
-			}
-			noteContent = noteContent.replace(
-				"{{#notes}}(.*?){{/notes}}",
-				highlightsSection
-			);
-
-			// Create or update the file
-			const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-			if (existingFile instanceof TFile) {
-				await this.app.vault.modify(existingFile, noteContent);
-			} else {
-				await this.app.vault.create(filePath, noteContent);
-			}
-
-			// Update last sync time
-			this.settings.lastSyncTime = Date.now();
-			await this.saveSettings();
-
-			new Notice(`Synced: ${item.title}`);
-		} catch (error) {
-			console.error("Error syncing item:", error);
-			new Notice(`Error syncing: ${item.title}`);
-		}
+	private isSyncing(): boolean {
+		const inflight = this.settings.syncState.inFlightRun;
+		if (!inflight) return false;
+		// Treat very old locks as crashes.
+		return Date.now() - inflight.startedAtMs < 10 * 60 * 1000;
 	}
 
-	async syncItems(items: ExportedItem[]) {
-		for (const item of items) {
-			await this.syncItemToObsidian(item);
+	private async runSync(opts: { auto: boolean }) {
+		if (!this.syncManager) throw new Error("Sync manager not initialized");
+		if (!this.settings.apiToken) {
+			new Notice("InfoFlow API token missing");
+			return;
 		}
+		if (this.isSyncing()) {
+			new Notice("InfoFlow sync already in progress");
+			return;
+		}
+
+		// Clear orphaned lock if present.
+		if (this.settings.syncState.inFlightRun) {
+			this.settings.syncState.inFlightRun = null;
+			await this.saveSettings();
+		}
+
+		await this.syncManager.sync(this.settings.syncState, {
+			infoFlowEndpoint: this.settings.infoFlowEndpoint || "https://www.infoflow.app",
+			apiToken: this.settings.apiToken,
+			targetFolder: this.settings.targetFolder,
+			fileNameTemplate: this.settings.fileNameTemplate,
+			noteTemplate: this.settings.noteTemplate,
+			from: this.settings.from,
+			to: this.settings.to,
+			tags: this.settings.tags,
+			folders: this.settings.folders,
+		}, { auto: opts.auto });
+	}
+
+	public configureSchedule() {
+		if (this.scheduleIntervalId) {
+			window.clearInterval(this.scheduleIntervalId);
+			this.scheduleIntervalId = null;
+		}
+		const minutes = Number(this.settings.syncFrequency);
+		if (!Number.isFinite(minutes) || minutes <= 0) return;
+
+		const ms = minutes * 60 * 1000;
+		this.scheduleIntervalId = window.setInterval(() => {
+			this.runSync({ auto: true }).catch((e) => console.error("Auto sync error:", e));
+		}, ms);
 	}
 }
 
@@ -220,6 +271,17 @@ class InfoFlowSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 
 		containerEl.empty();
+
+		containerEl.createEl("h2", { text: "InfoFlow Sync" });
+
+		const lastRun = this.plugin.settings.syncState.lastRun;
+		if (lastRun) {
+			const statusText =
+				lastRun.status === "success"
+					? `Last sync: success (${new Date(lastRun.atMs).toLocaleString()})`
+					: `Last sync: failed (${new Date(lastRun.atMs).toLocaleString()}): ${lastRun.error ?? ""}`;
+			containerEl.createEl("p", { text: statusText });
+		}
 
 		new Setting(containerEl)
 			.setName("InfoFlow Endpoint")
@@ -344,6 +406,11 @@ class InfoFlowSettingTab extends PluginSettingTab {
 					.setPlaceholder("Enter the file name template")
 					.setValue(this.plugin.settings.fileNameTemplate)
 					.onChange(async (value) => {
+						const check = validateTemplate(value);
+						if (!check.ok) {
+							new Notice(`Invalid file name template: ${check.error}`);
+							return;
+						}
 						this.plugin.settings.fileNameTemplate = value;
 						await this.plugin.saveSettings();
 					})
@@ -351,12 +418,17 @@ class InfoFlowSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Note Template")
-			.setDesc("The template for generating note content. Parameters available: {{title}}, {{url}}, {{itemType}}, {{author}}, {{tags}}, {{createdAt}}, {{updatedAt}}, {{content}}, {{notes}}")
+			.setDesc("Mustache template. Supports sections like {{#notes}}...{{/notes}} and {{{content}}} for raw markdown.")
 			.addText((text) =>
 				text
 					.setPlaceholder("Enter the note template")
 					.setValue(this.plugin.settings.noteTemplate)
 					.onChange(async (value) => {
+						const check = validateTemplate(value);
+						if (!check.ok) {
+							new Notice(`Invalid note template: ${check.error}`);
+							return;
+						}
 						this.plugin.settings.noteTemplate = value;
 						await this.plugin.saveSettings();
 					})
@@ -364,7 +436,7 @@ class InfoFlowSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Sync Frequency")
-			.setDesc("The frequency for syncing items")
+			.setDesc("Minutes between automatic sync runs while Obsidian is open. Use 0 for Manual.")
 			.addText((text) =>
 				text
 					.setPlaceholder("Enter the sync frequency (in minutes)")
@@ -372,8 +444,31 @@ class InfoFlowSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.syncFrequency = parseInt(value);
 						await this.plugin.saveSettings();
+						this.plugin.configureSchedule();
 					})
 			);
+
+		new Setting(containerEl)
+			.setName("Sync automatically when Obsidian opens")
+			.setDesc("If enabled, the plugin will sync once when Obsidian finishes loading.")
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.syncOnLoad);
+				toggle.onChange(async (val) => {
+					this.plugin.settings.syncOnLoad = val;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Resync deleted files")
+			.setDesc("If enabled, deleting a synced file queues that item for reimport on next sync.")
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.syncDeletedFiles);
+				toggle.onChange(async (val) => {
+					this.plugin.settings.syncDeletedFiles = val;
+					await this.plugin.saveSettings();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName("Last Sync Time")

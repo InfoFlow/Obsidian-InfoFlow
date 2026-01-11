@@ -12,6 +12,7 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"@types/mustache": "^4.2.6",
 		"@types/node": "^16.11.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
@@ -24,6 +25,7 @@
 	"dependencies": {
 		"@types/turndown": "^5.0.5",
 		"axios": "^1.7.9",
+		"mustache": "^4.2.0",
 		"turndown": "^7.2.0"
 	}
 }
